@@ -1,20 +1,68 @@
-use crate::console;
+use crate::{console, synchronisation, synchronisation::NullLock};
 use core::fmt;
 
-struct QemuOutput;
+struct QemuOutputInner {
+    chars_written: usize,
+}
 
-impl fmt::Write for QemuOutput {
+struct QemuOutput {
+    inner: NullLock<QemuOutputInner>,
+}
+
+static QEMU_OUTPUT: QemuOutput = QemuOutput::new();
+
+impl QemuOutputInner {
+    const fn new() -> QemuOutputInner {
+        QemuOutputInner { chars_written: 0 }
+    }
+
+    fn write_char(&mut self, c: char) {
+        unsafe {
+            core::ptr::write_volatile(0x3F20_1000 as *mut u8, c as u8);
+        }
+
+        self.chars_written += 1;
+    }
+}
+
+impl fmt::Write for QemuOutputInner {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            unsafe {
-                core::ptr::write_volatile(0x3F20_1000 as *mut u8, c as u8);
+            if c == '\n' {
+                self.write_char('\r');
             }
+
+            self.write_char(c);
         }
 
         Ok(())
     }
 }
 
-pub fn console() -> impl console::interface::Write {
-    QemuOutput {}
+impl QemuOutput {
+    pub const fn new() -> QemuOutput {
+        QemuOutput {
+            inner: NullLock::new(QemuOutputInner::new())
+        }
+    }
+}
+
+pub fn console() -> &'static impl console::interface::All {
+    &QEMU_OUTPUT
+}
+
+use synchronisation::interface::Mutex;
+
+impl console::interface::Write for QemuOutput {
+    fn write_fmt(&self, args: core::fmt::Arguments) -> fmt::Result {
+        let mut r = &self.inner;
+        r.lock(|inner| fmt::Write::write_fmt(inner, args))
+    }
+}
+
+impl console::interface::Statistics for QemuOutput {
+    fn chars_written(&self) -> usize {
+        let mut r = &self.inner;
+        r.lock(|inner| inner.chars_written)
+    }
 }
