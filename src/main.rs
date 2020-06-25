@@ -9,6 +9,7 @@
 mod bsp;
 mod console;
 mod cpu;
+mod driver;
 mod memory;
 mod panic_wait;
 mod print;
@@ -16,11 +17,50 @@ mod runtime_init;
 mod synchronisation;
 
 unsafe fn kernel_init() -> ! {
-    use console::interface::Statistics;
+    use driver::interface::DriverManager;
 
-    println!("[0] Hello from Rust!");
-    println!("[1] Chars written: {}", bsp::console::console().chars_written());
-    println!("[2] Stop here.");
+    for i in bsp::driver::driver_manager().all_device_drivers().iter() {
+        if i.init().is_err() {
+            panic!("Error loading driver: {}", i.compatible())
+        }
+    }
+    bsp::driver::driver_manager().post_device_driver_init();
 
-    cpu::wait_forever()
+    kernel_main();
+}
+
+fn kernel_main() -> ! {
+    use console::interface::All;
+    use driver::interface::DriverManager;
+
+    loop {
+        if bsp::console::console().read_char() == '\n' {
+            break;
+        }
+    }
+
+    println!("[0] Booting on {}", bsp::board_name());
+    println!("[1] Drivers loaded");
+
+    for (i, driver) in bsp::driver::driver_manager()
+            .all_device_drivers()
+            .iter()
+            .enumerate() {
+        println!("      {}. {}", i + 1, driver.compatible());
+    }
+
+    println!("[2] Chars written: {}", bsp::console::console().chars_written());
+    println!("[3] Echoing input");
+    print!("[4]: ");
+
+    let mut i = 5;
+
+    loop {
+        let c = bsp::console::console().read_char();
+        bsp::console::console().write_char(c);
+        if c == '\n' {
+            print!("[{}]: ", i);
+            i += 1;
+        }
+    }
 }
